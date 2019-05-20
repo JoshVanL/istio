@@ -75,6 +75,9 @@ type Options struct {
 	// The Vault TLS root certificate.
 	VaultTLSRootCert string
 
+	// The namespace for the cert-manager issuer and certificates
+	CertManagerNamespace string
+
 	// EnableWorkloadSDS indicates whether node agent works as SDS server for workload proxies.
 	EnableWorkloadSDS bool
 

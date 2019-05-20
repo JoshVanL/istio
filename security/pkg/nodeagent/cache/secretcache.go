@@ -599,7 +599,7 @@ func (sc *SecretCache) generateSecret(ctx context.Context, token, resourceName s
 	var certChainPEM []string
 	for {
 		certChainPEM, err = sc.fetcher.CaClient.CSRSign(
-			ctx, csrPEM, exchangedToken, int64(sc.configOptions.SecretTTL.Seconds()))
+			ctx, csrPEM, keyPEM, exchangedToken, int64(sc.configOptions.SecretTTL.Seconds()))
 		if err == nil {
 			break
 		}

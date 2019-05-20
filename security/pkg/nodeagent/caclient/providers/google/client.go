@@ -67,7 +67,7 @@ func NewGoogleCAClient(endpoint string, tls bool) (caClientInterface.Client, err
 }
 
 // CSR Sign calls Google CA to sign a CSR.
-func (cl *googleCAClient) CSRSign(ctx context.Context, csrPEM []byte, token string,
+func (cl *googleCAClient) CSRSign(ctx context.Context, csrPEM, keyPEM []byte, token string,
 	certValidTTLInSec int64) ([]string /*PEM-encoded certificate chain*/, error) {
 	req := &gcapb.IstioCertificateRequest{
 		Csr:              string(csrPEM),

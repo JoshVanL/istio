@@ -281,6 +281,8 @@ github.com/istio/klog v0.0.0-20190424230111-fb7481ea8bcf h1:AshFubsUWsHMYfGoz5XL
 github.com/istio/klog v0.0.0-20190424230111-fb7481ea8bcf/go.mod h1:9gnFtvcm4y+2DZMNXbO8Q7Ke2kUDomg7HhR/mEs5wVA=
 github.com/jefferai/jsonx v1.0.0 h1:Xoz0ZbmkpBvED5W9W1B5B/zc3Oiq7oXqiW7iRV3B6EI=
 github.com/jefferai/jsonx v1.0.0/go.mod h1:OGmqmi2tTeI/PS+qQfBDToLHHJIy/RMp24fPo8vFvoQ=
+github.com/jetstack/cert-manager v0.7.2 h1:NroJN9tEuW3CCwkKqRfHs8hCCsVvFl1InCKwI/Obd9k=
+github.com/jetstack/cert-manager v0.7.2/go.mod h1:nbddmhjWxYGt04bxvwVGUSeLhZ2PCyNvd7MpXdq+yWY=
 github.com/jmespath/go-jmespath v0.0.0-20160202185014-0b12d6b521d8 h1:12VvqtR6Aowv3l/EQUlocDHW2Cp4G9WJVH7uyH8QFJE=
 github.com/jmespath/go-jmespath v0.0.0-20160202185014-0b12d6b521d8/go.mod h1:Nht3zPeWKUH0NzdCt2Blrr5ys8VGpn0CEB0cQHVjt7k=
 github.com/json-iterator/go v0.0.0-20180914014843-2433035e5132 h1:iRdNmFu7aSZLOiWsUJwpdZuiti7CcGRELZbSz5r+tHI=
