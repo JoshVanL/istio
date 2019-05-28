@@ -15,11 +15,13 @@
 package caclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	certmanagerv1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1alpha1"
@@ -46,6 +48,8 @@ type certManagerClient struct {
 	restConfig *restclient.Config
 	kClient    *kubeclient.Clientset
 	cmClient   *certmanagerclient.Clientset
+
+	mu sync.Mutex
 }
 
 // NewCertManagerClient create a CA client for Cert-Manager
@@ -84,22 +88,19 @@ func NewCertManagerClient(namespace string, tls bool, tlsRootCert []byte) (caCli
 	return c, nil
 }
 
-func (c *certManagerClient) CSRSign(ctx context.Context, csrPEM, key []byte, saToken string,
+func (c *certManagerClient) CSRSign(ctx context.Context, csrPEM, keyPEM []byte, saToken string,
 	certValidTTLInSec int64) ([]string /*PEM-encoded certificate chain*/, error) {
 
-	keyPEM := make([]byte, len(key))
-	copy(keyPEM, key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	log.Info("cert-manager: csr sign called")
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 
-	//config := &restclient.Config{
-	//	TLSClientConfig: c.restConfig.TLSClientConfig,
-	//	APIPath:         c.restConfig.APIPath,
-	//	Host:            c.restConfig.Host,
-	//	BearerToken:     saToken,
-	//}
-
-	log.Infof("cert-manager: parsing certificate request")
+	log.Info("cert-manager: csrSign called")
 
 	block, _ := pem.Decode(csrPEM)
 	if block == nil {
@@ -111,55 +112,89 @@ func (c *certManagerClient) CSRSign(ctx context.Context, csrPEM, key []byte, saT
 		return nil, fmt.Errorf("cert-manager: failed to parse certificate request: %s\n%s", err, csrPEM)
 	}
 
-	dnsNames := csr.DNSNames
+	var uriNames []string
 	for _, u := range csr.URIs {
-		dnsNames = append(csr.DNSNames, u.String())
+		uriNames = append(csr.DNSNames, u.String())
 	}
 
-	if len(dnsNames) == 0 {
-		return nil, fmt.Errorf("no dns names in CSR")
+	if len(uriNames) == 0 {
+		return nil, fmt.Errorf("no uri names in CSR")
 	}
 
 	name := fmt.Sprintf("%s",
 		strings.ReplaceAll(strings.ReplaceAll(
-			dnsNames[0], "spiffe://", ""), "/", "-"))
+			uriNames[0], "spiffe://", ""), "/", "-"))
 
 	if err := c.ensureSecret(name, keyPEM); err != nil {
 		return nil, err
 	}
 
-	if err := c.ensureCertificate(name, certValidTTLInSec, dnsNames, csr); err != nil {
-		return nil, err
+LOOP:
+	for {
+
+		select {
+		case <-ctx.Done():
+			log.Errorf("ctx error: %s", ctx.Err())
+			return nil, ctx.Err()
+		default:
+		}
+
+		cert, err := c.ensureCertificate(name, certValidTTLInSec, uriNames, csr)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Infof("Certificate conditions: %s %s/%s", cert.Status.Conditions, c.namespace, name)
+
+		for _, c := range cert.Status.Conditions {
+			if c.Type != certmanagerv1.CertificateConditionReady {
+				time.Sleep(time.Second * 2)
+				continue LOOP
+			}
+		}
+
+		log.Infof("Certificate conditions Ready %s %s/%s", cert.Status.Conditions, c.namespace, name)
+
+		break
 	}
 
 	var tlsCert []byte
 	var i int
 
 	for {
-		if i == 10 {
+		i++
+
+		select {
+		case <-ctx.Done():
+			log.Errorf("ctx error: %s", ctx.Err())
+			return nil, ctx.Err()
+		default:
+		}
+
+		if i > 3 {
 			return nil, fmt.Errorf(
-				"failed to wait for certificate to become ready in secret %s",
-				name)
+				"failed to wait for certificate to become ready in secret %s/%s",
+				c.namespace, name)
 		}
 
 		time.Sleep(time.Second * 2)
 
-		log.Info("waiting for certificate to become ready...")
+		log.Infof("waiting for certificate to become ready %s/%s ...", c.namespace, name)
 
 		s, err := c.kClient.CoreV1().Secrets(c.namespace).Get(name+"-tls", metav1.GetOptions{})
 		if err != nil {
-			return nil, err
-		}
+			if !errors.IsNotFound(err) {
+				return nil, err
+			}
 
-		log.Infof(">%s", s.Data)
+			continue
+		}
 
 		cert, ok := s.Data[corev1.TLSCertKey]
 		if ok && len(cert) > 0 {
 			tlsCert = cert
 			break
 		}
-
-		i++
 	}
 
 	var certChain []string
@@ -173,53 +208,62 @@ func (c *certManagerClient) CSRSign(ctx context.Context, csrPEM, key []byte, saT
 		certChain = append([]string{string(pem.EncodeToMemory(p))}, certChain...)
 	}
 
-	//err = c.cmClient.Certmanager().Certificates(c.namespace).Delete(name, nil)
-	//if err != nil {
-	//	return nil, err
-	//}
+	ca, err := c.getCA()
+	if err != nil {
+		return nil, err
+	}
 
-	//err = c.kClient.Core().Secrets(c.namespace).Delete(name+"-tls", nil)
-	//if err != nil {
-	//	return nil, err
-	//}
+	certChain = append(certChain, string(ca))
 
-	log.Infof("cert-manager: got cert chain response: %s", certChain)
-	log.Infof("cert-manager: using key: %s", keyPEM)
+	err = c.cmClient.Certmanager().Certificates(c.namespace).Delete(name, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete certificate %s: %s", name, err)
+	}
+
+	err = c.kClient.Core().Secrets(c.namespace).Delete(name+"-tls", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete secret %s-tls: %s", name, err)
+	}
 
 	return certChain, nil
 }
 
 func (c *certManagerClient) ensureCertificate(certName string, certValidTTLInSec int64,
-	dnsNames []string, csr *x509.CertificateRequest) error {
+	uriNames []string, csr *x509.CertificateRequest) (*certmanagerv1.Certificate, error) {
 	log.Infof("cert-manager: creating certificate: (%s/%s)", c.namespace, certName)
 
-	certObj := c.buildCertificate(certName, certValidTTLInSec, dnsNames, csr)
+	certObj := c.buildCertificate(certName, certValidTTLInSec, uriNames, csr)
 
 	cert, err := c.cmClient.Certmanager().Certificates(c.namespace).Get(certName, metav1.GetOptions{})
 	if err != nil {
 		if !errors.IsNotFound(err) {
-			return err
+			return nil, err
 		}
 
-		log.Infof("cert-manager: creating certificate: (%s/%s)", c.namespace, certName)
-
 		_, err := c.cmClient.Certmanager().Certificates(c.namespace).Create(certObj)
-		return err
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	//	if certObj.Spec.IssuerRef.Kind != cert.Spec.IssuerRef.Kind ||
-	//		certObj.Spec.IssuerRef.Name != cert.Spec.IssuerRef.Name ||
-	//		certObj.Spec.SecretName != cert.Spec.SecretName ||
-	//		!stringSliceCompare(certObj.Spec.DNSNames, cert.Spec.DNSNames) {
+	if certObj.Spec.IssuerRef.Kind != cert.Spec.IssuerRef.Kind ||
+		certObj.Spec.IssuerRef.Name != cert.Spec.IssuerRef.Name ||
+		certObj.Spec.SecretName != cert.Spec.SecretName ||
+		!stringSliceCompare(certObj.Spec.DNSNames, cert.Spec.DNSNames) {
 
-	log.Infof("cert-manager: updating certificate: (%s/%s)", c.namespace, certName)
-	certObj.ResourceVersion = cert.ResourceVersion
+		log.Infof("cert-manager: updating certificate: (%s/%s)", c.namespace, certName)
+		certObj.ResourceVersion = cert.ResourceVersion
+		if certObj.ResourceVersion == "" {
+			certObj.ResourceVersion = "0"
+		}
 
-	_, err = c.cmClient.Certmanager().Certificates(c.namespace).Update(certObj)
-	return err
-	//}
+		cert, err = c.cmClient.Certmanager().Certificates(c.namespace).Update(certObj)
+		if err != nil {
+			return nil, err
+		}
+	}
 
-	return nil
+	return cert, nil
 }
 
 func stringSliceCompare(a, b []string) bool {
@@ -248,32 +292,40 @@ func stringSliceCompare(a, b []string) bool {
 func (c *certManagerClient) ensureSecret(name string, keyPEM []byte) error {
 	secretName := name + "-tls"
 
-	_, err := c.kClient.CoreV1().Secrets(c.namespace).Get(secretName, metav1.GetOptions{})
+	secObj := c.buildSecret(secretName, keyPEM)
+
+	sec, err := c.kClient.CoreV1().Secrets(c.namespace).Get(secretName, metav1.GetOptions{})
 	if err != nil {
 		if !errors.IsNotFound(err) {
 			return err
 		}
 
 		log.Infof("cert-manager: creating secret: (%s/%s)", c.namespace, secretName)
-		_, err := c.kClient.CoreV1().Secrets(c.namespace).Create(
-			c.buildSecret(secretName, keyPEM))
-		return err
+		_, err := c.kClient.CoreV1().Secrets(c.namespace).Create(secObj)
+		if err != nil {
+			return err
+		}
+
+		return nil
 	}
 
-	//pk, ok := sec.Data[corev1.TLSPrivateKeyKey]
-	//if !ok || !bytes.Equal(pk, keyPEM) {
-	log.Infof("cert-manager: updating secret: (%s/%s)", c.namespace, secretName)
+	pk, ok := sec.Data[corev1.TLSPrivateKeyKey]
+	if !ok || !bytes.Equal(pk, keyPEM) {
+		log.Infof("cert-manager: updating secret: (%s/%s)", c.namespace, secretName)
+		secObj.ResourceVersion = sec.ResourceVersion
+		if secObj.ResourceVersion == "" {
+			secObj.ResourceVersion = "0"
+		}
 
-	_, err = c.kClient.CoreV1().Secrets(c.namespace).Update(
-		c.buildSecret(secretName, keyPEM))
-	return err
-	//}
+		_, err = c.kClient.CoreV1().Secrets(c.namespace).Update(secObj)
+		return err
+	}
 
 	return nil
 }
 
 func (c *certManagerClient) buildCertificate(certName string, certValidTTLInSec int64,
-	dnsNames []string, csr *x509.CertificateRequest) *certmanagerv1.Certificate {
+	uriNames []string, csr *x509.CertificateRequest) *certmanagerv1.Certificate {
 	return &certmanagerv1.Certificate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      certName,
@@ -290,8 +342,13 @@ func (c *certManagerClient) buildCertificate(certName string, certValidTTLInSec 
 				Duration: time.Second * time.Duration(certValidTTLInSec),
 			},
 
-			DNSNames:   dnsNames,
-			SecretName: certName + "-tls",
+			RenewBefore: &metav1.Duration{
+				Duration: time.Second * time.Duration(certValidTTLInSec/4),
+			},
+
+			DNSNames:     uriNames,
+			SecretName:   certName + "-tls",
+			Organization: []string{"cluster.local"},
 		},
 	}
 }
@@ -308,4 +365,18 @@ func (c *certManagerClient) buildSecret(name string, keyPEM []byte) *corev1.Secr
 			corev1.TLSCertKey:       nil,
 		},
 	}
+}
+
+func (c *certManagerClient) getCA() ([]byte, error) {
+	s, err := c.kClient.CoreV1().Secrets(c.namespace).Get("istio-ca-secret", metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	ca, ok := s.Data["ca-cert.pem"]
+	if !ok {
+		return nil, fmt.Errorf("failed to get ca from secret %s/%s", c.namespace, "istio-ca-secret")
+	}
+
+	return ca, nil
 }
