@@ -77,6 +77,14 @@ const (
 	vaultRole     = "VAULT_ROLE"
 	vaultRoleFlag = "vaultRole"
 
+	// The environmental variable name for the cert-manager signing issuer name.
+	certmanagerIssuerName     = "CERT_MANAGER_ISSUER_NAME"
+	certmanagerIssuerNameFlag = "certmanagerIssuerName"
+
+	// The environmental variable name for the cert-manager signing issuer kind.
+	certmanagerIssuerKind     = "CERT_MANAGER_ISSUER_KIND"
+	certmanagerIssuerKindFlag = "certmanagerIssuerKind"
+
 	// The environmental variable name for Vault sign CSR path.
 	vaultSignCsrPath     = "VAULT_SIGN_CSR_PATH"
 	vaultSignCsrPathFlag = "vaultSignCsrPath"
@@ -201,7 +209,7 @@ func newSecretCache(serverOptions sds.Options) (workloadSecretCache, gatewaySecr
 		wSecretFetcher, err := secretfetcher.NewSecretFetcher(false, serverOptions.CAEndpoint,
 			serverOptions.CAProviderName, true, []byte(serverOptions.VaultTLSRootCert),
 			serverOptions.VaultAddress, serverOptions.VaultRole, serverOptions.VaultAuthPath,
-			serverOptions.VaultSignCsrPath)
+			serverOptions.VaultSignCsrPath, serverOptions.CertmanagerIssuerName, serverOptions.CertmanagerIssuerKind)
 		if err != nil {
 			log.Errorf("failed to create secretFetcher for workload proxy: %v", err)
 			os.Exit(1)
@@ -214,7 +222,7 @@ func newSecretCache(serverOptions sds.Options) (workloadSecretCache, gatewaySecr
 	}
 
 	if serverOptions.EnableIngressGatewaySDS {
-		gSecretFetcher, err := secretfetcher.NewSecretFetcher(true, "", "", false, nil, "", "", "", "")
+		gSecretFetcher, err := secretfetcher.NewSecretFetcher(true, "", "", false, nil, "", "", "", "", "", "")
 		if err != nil {
 			log.Errorf("failed to create secretFetcher for gateway proxy: %v", err)
 			os.Exit(1)
@@ -242,6 +250,8 @@ var (
 	vaultAuthPathEnv                   = env.RegisterStringVar(vaultAuthPath, "", "").Get()
 	vaultSignCsrPathEnv                = env.RegisterStringVar(vaultSignCsrPath, "", "").Get()
 	vaultTLSRootCertEnv                = env.RegisterStringVar(vaultTLSRootCert, "", "").Get()
+	certmanagerIssuerNameEnv           = env.RegisterStringVar(certmanagerIssuerName, "", "").Get()
+	certmanagerIssuerKindEnv           = env.RegisterStringVar(certmanagerIssuerKind, "", "").Get()
 	secretTTLEnv                       = env.RegisterDurationVar(secretTTL, 24*time.Hour, "").Get()
 	secretRefreshGraceDurationEnv      = env.RegisterDurationVar(SecretRefreshGraceDuration, 1*time.Hour, "").Get()
 	secretRotationIntervalEnv          = env.RegisterDurationVar(SecretRotationInterval, 10*time.Minute, "").Get()
@@ -300,6 +310,14 @@ func applyEnvVars(cmd *cobra.Command) {
 
 	if !cmd.Flag(vaultTLSRootCertFlag).Changed {
 		serverOptions.VaultTLSRootCert = vaultTLSRootCertEnv
+	}
+
+	if !cmd.Flag(certmanagerIssuerNameFlag).Changed {
+		serverOptions.CertmanagerIssuerName = certmanagerIssuerNameEnv
+	}
+
+	if !cmd.Flag(certmanagerIssuerKindFlag).Changed {
+		serverOptions.CertmanagerIssuerKind = certmanagerIssuerKindEnv
 	}
 
 	if !cmd.Flag(secretTTLFlag).Changed {
@@ -404,6 +422,11 @@ func main() {
 		"Vault sign CSR path")
 	rootCmd.PersistentFlags().StringVar(&serverOptions.VaultTLSRootCert, vaultTLSRootCertFlag, "",
 		"Vault TLS root certificate")
+
+	rootCmd.PersistentFlags().StringVar(&serverOptions.CertmanagerIssuerName, certmanagerIssuerNameFlag, "",
+		"Cert Manager Issuer Name")
+	rootCmd.PersistentFlags().StringVar(&serverOptions.CertmanagerIssuerKind, certmanagerIssuerKindFlag, "",
+		"Cert Manager Issuer Kind")
 
 	// Attach the Istio logging options to the command.
 	loggingOptions.AttachCobraFlags(rootCmd)

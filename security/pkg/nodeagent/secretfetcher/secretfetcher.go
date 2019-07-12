@@ -116,7 +116,8 @@ func fatalf(template string, args ...interface{}) {
 
 // NewSecretFetcher returns a pointer to a newly constructed SecretFetcher instance.
 func NewSecretFetcher(ingressGatewayAgent bool, endpoint, caProviderName string, tlsFlag bool,
-	tlsRootCert []byte, vaultAddr, vaultRole, vaultAuthPath, vaultSignCsrPath string) (*SecretFetcher, error) {
+	tlsRootCert []byte, vaultAddr, vaultRole, vaultAuthPath, vaultSignCsrPath string,
+	certmanagerIssuerName, certmanagerIssuerKind string) (*SecretFetcher, error) {
 	ret := &SecretFetcher{}
 
 	if ingressGatewayAgent {
@@ -130,7 +131,8 @@ func NewSecretFetcher(ingressGatewayAgent bool, endpoint, caProviderName string,
 		ret.InitWithKubeClient(cs.CoreV1())
 	} else {
 		caClient, err := ca.NewCAClient(endpoint, caProviderName, tlsFlag, tlsRootCert,
-			vaultAddr, vaultRole, vaultAuthPath, vaultSignCsrPath)
+			vaultAddr, vaultRole, vaultAuthPath, vaultSignCsrPath,
+			certmanagerIssuerName, certmanagerIssuerKind)
 		if err != nil {
 			secretFetcherLog.Errorf("failed to create caClient: %v", err)
 			return ret, fmt.Errorf("failed to create caClient")
