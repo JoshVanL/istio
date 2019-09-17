@@ -81,6 +81,15 @@ type Options struct {
 	// The Vault TLS root certificate.
 	VaultTLSRootCert string
 
+	// The Certmanager Issuer Name to sign certificates.
+	CertmanagerIssuerName string
+
+	// The Certmanager Issuer Kind to sign certificates.
+	CertmanagerIssuerKind string
+
+	// The Certmanager Issuer Group to sign certificates.
+	CertmanagerIssuerGroup string
+
 	// EnableWorkloadSDS indicates whether node agent works as SDS server for workload proxies.
 	EnableWorkloadSDS bool
 
