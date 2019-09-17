@@ -25,6 +25,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
+	"strings"
 
 	"istio.io/pkg/log"
 )
@@ -55,9 +56,14 @@ func GenCSR(options CertOptions) ([]byte, []byte, error) {
 
 // GenCSRTemplate generates a certificateRequest template with the given options.
 func GenCSRTemplate(options CertOptions) (*x509.CertificateRequest, error) {
+	cn := strings.ReplaceAll(strings.ReplaceAll(options.Host, "//", "/"), "/", ".")
+	cn = strings.ReplaceAll(cn, ":", "")
+	cn = strings.ReplaceAll(cn, "-", ".")
 	template := &x509.CertificateRequest{
 		Subject: pkix.Name{
 			Organization: []string{options.Org},
+			// TODO (@joshvanl): do this better
+			CommonName: cn,
 		},
 	}
 
